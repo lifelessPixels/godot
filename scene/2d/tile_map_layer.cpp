@@ -31,8 +31,11 @@
 #include "tile_map_layer.h"
 
 #include "core/io/marshalls.h"
+#include "core/math/color.h"
+#include "core/object/class_db.h"
 #include "scene/2d/tile_map.h"
 #include "scene/gui/control.h"
+#include "scene/resources/2d/tile_set.h"
 #include "scene/resources/world_2d.h"
 #include "servers/navigation_server_2d.h"
 
@@ -347,8 +350,11 @@ void TileMapLayer::_rendering_update(bool p_force_cleanup) {
 						random_animation_offset = RandomPCG(to_hash.hash()).randf();
 					}
 
+					// Apply per-cell modulation.
+					Color modulation = get_self_modulate() * cell_data.modulate;
+
 					// Drawing the tile in the canvas item.
-					draw_tile(ci, local_tile_pos - rendering_quadrant->canvas_items_position, tile_set, cell_data.cell.source_id, cell_data.cell.get_atlas_coords(), cell_data.cell.alternative_tile, -1, get_self_modulate(), tile_data, random_animation_offset);
+					draw_tile(ci, local_tile_pos - rendering_quadrant->canvas_items_position, tile_set, cell_data.cell.source_id, cell_data.cell.get_atlas_coords(), cell_data.cell.alternative_tile, -1, modulation, tile_data, random_animation_offset);
 				}
 
 				// Reset physics interpolation for any recreated canvas items.
@@ -1804,6 +1810,10 @@ void TileMapLayer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_pattern", "coords_array"), &TileMapLayer::get_pattern);
 	ClassDB::bind_method(D_METHOD("set_pattern", "position", "pattern"), &TileMapLayer::set_pattern);
 
+	// Cell Modulation.
+	ClassDB::bind_method(D_METHOD("set_cell_modulate", "coords", "modulation"), &TileMapLayer::set_cell_modulate, DEFVAL(Color(1.0, 1.0, 1.0)));
+	ClassDB::bind_method(D_METHOD("get_cell_modulate", "coords"), &TileMapLayer::get_cell_modulate);
+
 	// Terrains.
 	ClassDB::bind_method(D_METHOD("set_cells_terrain_connect", "cells", "terrain_set", "terrain", "ignore_empty_terrains"), &TileMapLayer::set_cells_terrain_connect, DEFVAL(true));
 	ClassDB::bind_method(D_METHOD("set_cells_terrain_path", "path", "terrain_set", "terrain", "ignore_empty_terrains"), &TileMapLayer::set_cells_terrain_path, DEFVAL(true));
@@ -2593,6 +2603,53 @@ void TileMapLayer::set_pattern(const Vector2i &p_position, const Ref<TileMapPatt
 	}
 }
 
+void TileMapLayer::set_cell_modulate(const Vector2i &p_coords, const Color &p_modulation) {
+	// Try to find a cell at given coords.
+	Vector2i pk(p_coords);
+	HashMap<Vector2i, CellData>::Iterator E = tile_map_layer_data.find(pk);
+
+	if (!E) {
+		// If there is nothing to do, just return.
+		return;
+	} else {
+		// If cell is invalid, do nothing.
+		if (E->value.cell.source_id == TileSet::INVALID_SOURCE || E->value.cell.get_atlas_coords() == TileSetSource::INVALID_ATLAS_COORDS || E->value.cell.alternative_tile == TileSetSource::INVALID_TILE_ALTERNATIVE) {
+			return;
+		}
+	}
+
+	// Otherwise access CellData and set modulation color.
+	CellData &cd = E->value;
+	cd.modulate = p_modulation;
+
+	// Make the given cell dirty.
+	if (!E->value.dirty_list_element.in_list()) {
+		dirty.cell_list.add(&(E->value.dirty_list_element));
+	}
+	_queue_internal_update();
+
+	used_rect_cache_dirty = true;
+}
+
+Color TileMapLayer::get_cell_modulate(const Vector2i &p_coords) const {
+	// Try to find a cell at given coords.
+	Vector2i pk(p_coords);
+	HashMap<Vector2i, CellData>::ConstIterator E = tile_map_layer_data.find(pk);
+
+	if (!E) {
+		// If there is no cell, just return white.
+		return Color(1.0, 1.0, 1.0);
+	} else {
+		// If cell is invalid, return black.
+		if (E->value.cell.source_id == TileSet::INVALID_SOURCE || E->value.cell.get_atlas_coords() == TileSetSource::INVALID_ATLAS_COORDS || E->value.cell.alternative_tile == TileSetSource::INVALID_TILE_ALTERNATIVE) {
+			return Color(1.0, 1.0, 1.0);
+		}
+	}
+
+	// Otherwise access CellData and return modulation color.
+	return E->value.modulate;
+}
+
 void TileMapLayer::set_cells_terrain_connect(TypedArray<Vector2i> p_cells, int p_terrain_set, int p_terrain, bool p_ignore_empty_terrains) {
 	ERR_FAIL_COND(tile_set.is_null());
 	ERR_FAIL_INDEX(p_terrain_set, tile_set->get_terrain_sets_count());
@@ -2778,7 +2835,7 @@ void TileMapLayer::set_tile_map_data_from_array(const Vector<uint8_t> &p_data) {
 		return;
 	}
 
-	const int cell_data_struct_size = 12;
+	const int cell_data_struct_size = 16;
 
 	int size = p_data.size();
 	const uint8_t *ptr = p_data.ptr();
@@ -2811,13 +2868,22 @@ void TileMapLayer::set_tile_map_data_from_array(const Vector<uint8_t> &p_data) {
 		uint16_t atlas_coords_y = decode_uint16(&cell_data_ptr[8]);
 		uint16_t alternative_tile = decode_uint16(&cell_data_ptr[10]);
 
+		// If data format is 1, decode modulation color.
+		Color modulation(1.0, 1.0, 1.0, 1.0);
+		if (format == TileMapLayerDataFormat::TIME_MAP_LAYER_DATA_FORMAT_1) {
+			// Encode modulation color as RGBA components.
+			uint32_t hex = decode_uint32(&cell_data_ptr[12]);
+			modulation = Color::hex(hex);
+		}
+
 		set_cell(Vector2i(x, y), source_id, Vector2i(atlas_coords_x, atlas_coords_y), alternative_tile);
+		set_cell_modulate(Vector2i(x, y), modulation);
 		index += cell_data_struct_size;
 	}
 }
 
 Vector<uint8_t> TileMapLayer::get_tile_map_data_as_array() const {
-	const int cell_data_struct_size = 12;
+	const int cell_data_struct_size = 16;
 
 	Vector<uint8_t> tile_map_data_array;
 	if (tile_map_layer_data.is_empty()) {
@@ -2848,6 +2914,9 @@ Vector<uint8_t> TileMapLayer::get_tile_map_data_as_array() const {
 		encode_uint16(E.value.cell.coord_x, &cell_data_ptr[6]);
 		encode_uint16(E.value.cell.coord_y, &cell_data_ptr[8]);
 		encode_uint16(E.value.cell.alternative_tile, &cell_data_ptr[10]);
+
+		// Store the modulation color as RGBA.
+		encode_uint32(E.value.modulate.to_rgba32(), &cell_data_ptr[12]);
 
 		index += cell_data_struct_size;
 	}

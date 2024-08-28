@@ -31,6 +31,7 @@
 #ifndef TILE_MAP_LAYER_H
 #define TILE_MAP_LAYER_H
 
+#include "core/math/vector2i.h"
 #include "scene/resources/2d/tile_set.h"
 
 class TileSetAtlasSource;
@@ -38,6 +39,7 @@ class TileMap;
 
 enum TileMapLayerDataFormat {
 	TILE_MAP_LAYER_DATA_FORMAT_0 = 0,
+	TIME_MAP_LAYER_DATA_FORMAT_1 = 1,
 	TILE_MAP_LAYER_DATA_FORMAT_MAX,
 };
 
@@ -110,6 +112,9 @@ struct CellData {
 	SelfList<CellData> rendering_quadrant_list_element;
 	LocalVector<LocalVector<RID>> occluders;
 
+	// Modulate.
+	Color modulate{ 1.0, 1.0, 1.0 };
+
 	// Physics.
 	LocalVector<RID> bodies;
 
@@ -134,6 +139,7 @@ struct CellData {
 		coords = p_other.coords;
 		cell = p_other.cell;
 		occluders = p_other.occluders;
+		modulate = p_other.modulate;
 		bodies = p_other.bodies;
 		navigation_regions = p_other.navigation_regions;
 		scene = p_other.scene;
@@ -147,6 +153,7 @@ struct CellData {
 		coords = p_other.coords;
 		cell = p_other.cell;
 		occluders = p_other.occluders;
+		modulate = p_other.modulate;
 		bodies = p_other.bodies;
 		navigation_regions = p_other.navigation_regions;
 		scene = p_other.scene;
@@ -448,6 +455,10 @@ public:
 	// Patterns.
 	Ref<TileMapPattern> get_pattern(TypedArray<Vector2i> p_coords_array);
 	void set_pattern(const Vector2i &p_position, const Ref<TileMapPattern> p_pattern);
+
+	// Cell modulation
+	void set_cell_modulate(const Vector2i &p_coords, const Color &p_modulation);
+	Color get_cell_modulate(const Vector2i &p_coords) const;
 
 	// Terrains.
 	void set_cells_terrain_connect(TypedArray<Vector2i> p_cells, int p_terrain_set, int p_terrain, bool p_ignore_empty_terrains = true);
